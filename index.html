@@ -1,0 +1,368 @@
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  #game-wrap {
+    font-family: var(--font-sans);
+    background: #F4F1FF;
+    border-radius: 20px;
+    overflow: hidden;
+    width: 100%;
+  }
+  #top-bar {
+    background: #6B5CE7;
+    color: white;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  #top-bar .logo { font-size: 20px; font-weight: 600; letter-spacing: -0.5px; }
+  #top-bar .logo span { color: #F4A14A; }
+  #status-chip {
+    font-size: 12px;
+    background: rgba(255,255,255,0.2);
+    padding: 4px 12px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pdot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #F4A14A;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  #score-bar {
+    background: #EDE8FF;
+    padding: 8px 20px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #6B5CE7;
+    font-weight: 500;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #FAF8FF;
+    cursor: pointer;
+    touch-action: none;
+  }
+  #bottom-panel {
+    background: #6B5CE7;
+    color: white;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  #timer-bar-bg { width: 130px; height: 6px; background: rgba(255,255,255,0.25); border-radius: 3px; }
+  #timer-bar { height: 6px; background: #F4A14A; border-radius: 3px; width: 100%; transition: width 1s linear; }
+  #timer-num { font-size: 13px; font-weight: 600; min-width: 34px; }
+  #wrap-rel { position: relative; }
+  #ready-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: rgba(107,92,231,0.93);
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    text-align: center;
+    gap: 10px;
+    z-index: 10;
+  }
+  #ready-overlay.show { display: flex; }
+  #ready-overlay h2 { font-size: 24px; font-weight: 600; }
+  #ready-overlay p { font-size: 14px; opacity: 0.85; max-width: 260px; line-height: 1.5; }
+  #ready-btn {
+    margin-top: 6px;
+    background: #F4A14A;
+    color: white;
+    border: none;
+    padding: 12px 28px;
+    border-radius: 30px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    animation: bob 1.5s ease-in-out infinite;
+  }
+  @keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+</style>
+
+<div id="game-wrap">
+  <div id="top-bar">
+    <div class="logo">zolve<span>.</span></div>
+    <div id="status-chip"><div class="pdot"></div><span id="status-txt">Setting up your account…</span></div>
+  </div>
+  <div id="score-bar">
+    <span>💰 Caught: <strong id="score-disp">0</strong></span>
+    <span>🏆 Best: <strong id="hi-disp">0</strong></span>
+    <span style="opacity:0.7;font-size:12px">Tap / Space / ↑ to jump</span>
+  </div>
+  <div id="wrap-rel">
+    <canvas id="gc"></canvas>
+    <div id="ready-overlay">
+      <div style="font-size:44px">🎉</div>
+      <h2>You're all set!</h2>
+      <p>Our servers caught up. Your Zolve account is ready!</p>
+      <button id="ready-btn" onclick="document.getElementById('ready-overlay').classList.remove('show');document.getElementById('status-txt').textContent='Account ready ✓'">Continue onboarding →</button>
+    </div>
+  </div>
+  <div id="bottom-panel">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:12px;opacity:0.8">Back in ~</span>
+      <div id="timer-bar-bg"><div id="timer-bar"></div></div>
+      <span id="timer-num">60s</span>
+    </div>
+    <span style="font-size:12px;opacity:0.8">Too many students in line 😄</span>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gc');
+const ctx = canvas.getContext('2d');
+
+const W = 680, H = 220;
+canvas.width = W;
+canvas.height = H;
+
+const GROUND_Y = 160;
+const GRAVITY = 0.6;
+const JUMP_FORCE = -12;
+
+let stu = { x: 90, y: GROUND_Y, vy: 0, grounded: true, frame: 0, tick: 0 };
+let dollars = [];
+let books = [];
+let particles = [];
+let score = 0, best = 0;
+let crashed = false, crashTimer = 0;
+let spawnD = 0, spawnB = 0;
+let bg = 0;
+let started = false;
+
+function jump() {
+  if (!started) started = true;
+  if (stu.grounded && !crashed) {
+    stu.vy = JUMP_FORCE;
+    stu.grounded = false;
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+});
+canvas.addEventListener('click', jump);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); }, { passive: false });
+
+function drawStu(x, y, frame, grounded) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  const lSwing = grounded ? Math.sin(frame * 0.5) * 8 : 6;
+  const rSwing = grounded ? -Math.sin(frame * 0.5) * 8 : -6;
+
+  ctx.fillStyle = '#4F3CC9';
+  ctx.beginPath(); ctx.ellipse(-5, 32 + lSwing * 0.3, 5, 12, 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(5, 32 - rSwing * 0.3, 5, 12, -0.1, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#6B5CE7';
+  ctx.beginPath(); ctx.roundRect(-14, 0, 28, 30, 7); ctx.fill();
+
+  ctx.fillStyle = '#D6CFFF';
+  ctx.beginPath(); ctx.roundRect(-9, 4, 18, 18, 4); ctx.fill();
+  ctx.fillStyle = '#6B5CE7';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Z', 0, 17);
+
+  ctx.strokeStyle = '#6B5CE7';
+  ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-12, 8); ctx.lineTo(-20, 18 + lSwing * 0.5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(12, 8); ctx.lineTo(20, 18 + rSwing * 0.5); ctx.stroke();
+
+  ctx.fillStyle = '#FFCF8B';
+  ctx.beginPath(); ctx.arc(0, -8, 11, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#222';
+  ctx.beginPath(); ctx.arc(-4, -7, 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(4, -7, 1.5, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#F4A14A';
+  ctx.beginPath(); ctx.arc(0, -18, 13, Math.PI, 0); ctx.fill();
+  ctx.fillStyle = '#3D2D99';
+  ctx.beginPath(); ctx.roundRect(-14, -21, 28, 6, 2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawDollar(d) {
+  ctx.save();
+  ctx.translate(d.x, d.y);
+  ctx.rotate(d.rot);
+  ctx.fillStyle = '#16A34A';
+  ctx.beginPath(); ctx.roundRect(-14, -10, 28, 20, 4); ctx.fill();
+  ctx.strokeStyle = '#15803D'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(-14, -10, 28, 20, 4); ctx.stroke();
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 15px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('$', 0, 0);
+  ctx.restore();
+}
+
+function drawBook(b) {
+  ctx.save();
+  ctx.fillStyle = '#F4A14A';
+  ctx.beginPath(); ctx.roundRect(b.x, GROUND_Y - b.h, b.w, b.h, [4,4,0,0]); ctx.fill();
+  ctx.fillStyle = '#D97706';
+  ctx.beginPath(); ctx.roundRect(b.x + 2, GROUND_Y - b.h, 6, b.h, [3,0,0,0]); ctx.fill();
+  ctx.font = '18px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('📚', b.x + b.w / 2, GROUND_Y - b.h - 4);
+  ctx.restore();
+}
+
+function spawnDollar() {
+  const yOff = 20 + Math.random() * 70;
+  dollars.push({ x: W + 20, y: GROUND_Y - yOff, rot: 0, rv: (Math.random() - 0.5) * 0.06 });
+}
+
+function spawnBook() {
+  books.push({ x: W + 20, w: 24, h: 32 + Math.floor(Math.random() * 28) });
+}
+
+function boom(x, y) {
+  for (let i = 0; i < 8; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 5,
+      vy: -2 - Math.random() * 3,
+      life: 1,
+      col: ['#22C55E','#F4A14A','#6B5CE7','#FFCF8B','#EF4444'][Math.floor(Math.random()*5)]
+    });
+  }
+}
+
+function drawBg() {
+  ctx.fillStyle = '#FAF8FF';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#EDE8FF';
+  for (let i = 0; i < 3; i++) {
+    const cx = ((bg * 0.2 + i * 220) % (W + 100)) - 50;
+    ctx.beginPath(); ctx.roundRect(cx, 25, 70 + i * 10, 22, 11); ctx.fill();
+  }
+
+  ctx.strokeStyle = '#D8D0FF'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, GROUND_Y + 2); ctx.lineTo(W, GROUND_Y + 2); ctx.stroke();
+
+  ctx.strokeStyle = '#EDE8FF'; ctx.lineWidth = 1;
+  ctx.setLineDash([16, 14]);
+  ctx.beginPath(); ctx.moveTo(0, GROUND_Y + 2); ctx.lineTo(W, GROUND_Y + 2); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function update(dt) {
+  bg += 2 * dt;
+
+  if (crashed) {
+    crashTimer -= dt;
+    if (crashTimer <= 0) {
+      crashed = false;
+      books = []; dollars = [];
+      stu.y = GROUND_Y; stu.vy = 0; stu.grounded = true;
+    }
+    return;
+  }
+
+  if (!started) return;
+
+  stu.vy += GRAVITY * dt;
+  stu.y += stu.vy * dt;
+  if (stu.y >= GROUND_Y) { stu.y = GROUND_Y; stu.vy = 0; stu.grounded = true; }
+  stu.tick += dt;
+  if (stu.tick > 5) { stu.frame++; stu.tick = 0; }
+
+  spawnD += dt;
+  if (spawnD > 55) { spawnDollar(); spawnD = 0; }
+  spawnB += dt;
+  if (spawnB > 130 + Math.random() * 50) { spawnBook(); spawnB = 0; }
+
+  const spd = 3 * dt;
+  dollars.forEach(d => { d.x -= spd; d.rot += d.rv * dt; });
+  books.forEach(b => b.x -= spd);
+
+  dollars = dollars.filter(d => {
+    const hit = d.x > stu.x - 20 && d.x < stu.x + 20 && d.y > stu.y - 48 && d.y < stu.y + 10;
+    if (hit) { score++; if (score > best) best = score; boom(d.x, d.y); document.getElementById('score-disp').textContent = score; document.getElementById('hi-disp').textContent = best; return false; }
+    return d.x > -40;
+  });
+
+  books = books.filter(b => {
+    const bTop = GROUND_Y - b.h;
+    const hit = b.x + b.w > stu.x - 10 && b.x < stu.x + 14 && bTop < stu.y - 2;
+    if (hit) { crashed = true; crashTimer = 60; return true; }
+    return b.x > -40;
+  });
+}
+
+function draw() {
+  drawBg();
+
+  if (crashed) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(239,68,68,0.12)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#DC2626';
+    ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Oops! Watch out for the textbooks! 📚', W/2, H/2 - 14);
+    ctx.fillStyle = '#9585EF'; ctx.font = '13px sans-serif';
+    ctx.fillText('Tap or press Space to try again', W/2, H/2 + 14);
+    ctx.restore();
+  } else {
+    dollars.forEach(drawDollar);
+    books.forEach(drawBook);
+    drawStu(stu.x, stu.y, stu.frame, stu.grounded);
+  }
+
+  if (!started && !crashed) {
+    ctx.fillStyle = 'rgba(107,92,231,0.7)';
+    ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Tap or press Space to start jumping!', W/2, H/2 + 4);
+  }
+
+  particles.forEach(p => {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  });
+  particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.2; p.life -= 0.045; });
+  particles = particles.filter(p => p.life > 0);
+}
+
+let last = 0;
+function loop(ts) {
+  const dt = Math.min((ts - last) / 16, 3);
+  last = ts;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+let rem = 60;
+const tBar = document.getElementById('timer-bar');
+const tNum = document.getElementById('timer-num');
+const interval = setInterval(() => {
+  rem--;
+  tNum.textContent = rem + 's';
+  tBar.style.width = (rem / 60 * 100) + '%';
+  if (rem <= 15) tBar.style.background = '#22C55E';
+  if (rem <= 0) { clearInterval(interval); document.getElementById('ready-overlay').classList.add('show'); }
+}, 1000);
+</script>
